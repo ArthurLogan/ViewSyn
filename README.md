@@ -3,7 +3,7 @@ Graduation Project
 
 
 
-## 基本用法
+## Usage
 
 ```shell
 cd code;

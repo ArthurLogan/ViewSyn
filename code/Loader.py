@@ -33,8 +33,8 @@ class Loader:
         for filename in os.listdir(glob_dir):
             sequences += parse_glob(os.path.join(glob_dir, filename))
 
-        self.valid_data = sequences[996:999]
-        self.train_data = sequences[:996] + sequences[999:]
+        self.valid_data = sequences[:3]
+        self.train_data = sequences[3:]
         random.shuffle(self.train_data)
         print('[Loader] Number of sequence: %d' % len(sequences))
 

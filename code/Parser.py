@@ -8,10 +8,10 @@ def parse_args():
     parser = argparse.ArgumentParser('ViewSynthesis')
 
     # i/o
-    parser.add_argument('-glob_dir', default='./glob/train/ods', help='Path to camera files')
-    parser.add_argument('-image_dir', default='./data', help='Path to images directories')
-    parser.add_argument('-checkpoint_dir', default='./checkpoint', help='Path to load/save the models')
-    parser.add_argument('-result_dir', default='./result', help='Path to save result')
+    parser.add_argument('-glob_dir', default='../glob/train/ods', help='Path to camera files')
+    parser.add_argument('-image_dir', default='../data', help='Path to images directories')
+    parser.add_argument('-checkpoint_dir', default='../checkpoint', help='Path to load/save the models')
+    parser.add_argument('-result_dir', default='../result', help='Path to save result')
     parser.add_argument('-experiment_name', default='coord', help='Name for experiment to run')
     parser.add_argument('-infer_dir', default='infer/', help='Path to save inference images')
     parser.add_argument('-sphre_dir', default='sphre/', help='Path to save sphere images')
@@ -19,8 +19,8 @@ def parse_args():
     parser.add_argument('-curve_dir', default='curve/', help='Path to save curves')
 
     # for eval
-    parser.add_argument('-test_image_dir', default='./test_data', help='Path to test images directories')
-    parser.add_argument('-test_demon_dir', default='./test', help='Path to save test images')
+    parser.add_argument('-test_image_dir', default='../test_data', help='Path to test images directories')
+    parser.add_argument('-test_demon_dir', default='../test', help='Path to save test images')
 
     # training hyper-parameters
     parser.add_argument('-lr', default=0.0002, type=float, help='Learning rate')

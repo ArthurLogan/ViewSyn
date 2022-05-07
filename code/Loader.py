@@ -3,7 +3,6 @@ import numpy as np
 import random
 import cv2
 import torch
-from time import time
 
 from Dataset import OdsSequence
 from Parser import parse_glob
@@ -62,18 +61,23 @@ class Loader:
             self.index = 0
             random.shuffle(self.train_data)
 
+        name = []
         ref, src, tgt = [], [], []
         pos = []
         intrinsic = []
         for sequence in self.train_data[self.index*self.batch_size:(self.index+1)*self.batch_size]:
             ref_, src_, tgt_ = self.load_image_data(sequence)
+            pos_ = torch.tensor(sequence.tgt_pose, dtype=torch.float).cuda()
+            int_ = torch.tensor(sequence.intrinsic, dtype=torch.float).cuda()
+            name.append(sequence.name())
             ref.append(ref_)
             src.append(src_)
             tgt.append(tgt_)
-            pos.append(torch.tensor(sequence.tgt_pose, dtype=torch.float).cuda())
-            intrinsic.append(torch.tensor(sequence.intrinsic, dtype=torch.float).cuda())
+            pos.append(pos_)
+            intrinsic.append(int_)
 
         batch = dict()
+        batch['name'] = name
         batch['ref'] = torch.stack(ref)
         batch['src'] = torch.stack(src)
         batch['tgt'] = torch.stack(tgt)
@@ -92,15 +96,18 @@ class Loader:
         """Sample test data for visualization"""
         data = self.valid_data[0]
         ref, src, tgt = self.load_image_data(data)
+        pos = torch.tensor(data.tgt_pose, dtype=torch.float).cuda()
+        intri = torch.tensor(data.intrinsic, dtype=torch.float).cuda()
         h, w, c = ref.shape
 
         batch = dict()
+        batch['name'] = [data.name()]
         batch['ref'] = ref.view([1, h, w, c])
         batch['src'] = src.view([1, h, w, c])
         batch['tgt'] = tgt.view([1, h, w, c])
-        batch['pos'] = torch.tensor(data.tgt_pose, dtype=torch.float).view([1, -1]).cuda()
+        batch['pos'] = pos.view([1, 3])
         batch['depth'] = torch.tensor(self.depth, dtype=torch.float).cuda()
-        batch['intrinsic'] = torch.tensor(data.intrinsic, dtype=torch.float).view([1, 3, 3]).cuda()
+        batch['intrinsic'] = intri.view([1, 3, 3])
         inp, out = sphere_sweep(batch['ref'], batch['src'], batch['tgt'], self.one, batch['depth'], batch['intrinsic'])
         tri, ___ = sphere_sweep(batch['ref'], batch['src'], batch['tgt'], self.rot, batch['depth'], batch['intrinsic'])
         batch['input'] = inp

@@ -1,9 +1,10 @@
 import numpy as np
-import os
 import torch
-from time import time
 import cv2
-import matplotlib.pyplot as plt
+import os
+import json
+import shutil
+from matplotlib import pyplot as plt
 
 
 def bilinear_wrapper(images: torch.Tensor, pixels: torch.Tensor):
@@ -56,94 +57,93 @@ def bilinear_wrapper(images: torch.Tensor, pixels: torch.Tensor):
 def composite(images: torch.Tensor, alphas: torch.Tensor):
     """Composite rgba images to output"""
     d, b, c, h, w = images.shape
-    out = 0
-    for i in range(d):
+    out = images[0]
+    for i in range(1, d):
         rgb = images[i]
         alp = alphas[i]
         out = rgb * alp + out * (1.0 - alp)
     return out
 
 
-def remove_output(path: str):
-    """Remove last train output"""
-    for dir in os.listdir(path):
-        dir = os.path.join(path, dir)
-        if os.path.isdir(dir):
-            for fname in os.listdir(dir):
-                os.remove(os.path.join(dir, fname))
-
-
 def save_image(im: np.ndarray, path: str, norm: bool = False):
-    """Output test images"""
-    if norm:
-        im = (im * 255.0).astype(np.uint8)
-    else:
-        im = ((im + 1.) / 2. * 255.0).astype(np.uint8)
-    if len(im.shape) == 4:
-        im = im[0]
-    im = np.transpose(im, [1, 2, 0])
-    cv2.imwrite(path, im)
-
-
-def save_plot(im: np.ndarray, path: str, norm: bool = False):
     """Output subplots"""
+    if len(im.shape) == 3:
+        im = np.expand_dims(im, 0)
     im = np.transpose(im, [0, 2, 3, 1])
     if norm:
         im = (im * 255.0).astype(np.uint8)
     else:
         im = ((im + 1.) / 2. * 255.0).astype(np.uint8)
     b, h, w, c = im.shape
-    s = 0
     out = np.zeros((b * h + (b - 1) * 10, w, c), dtype=np.uint8)
+    s = 0
     for i in range(b):
         out[s:s+h] = im[i]
         s += h + 10
     cv2.imwrite(path, out)
 
 
-def save_msi(rgb: np.ndarray, wgt: np.ndarray, alp: np.ndarray, path: str):
-    """Output msi images"""
-    save_plot(rgb, path[:-5] + '_rgb.jpeg')
-    save_plot(wgt, path[:-5] + '_wgt.jpeg', True)
-    save_plot(alp, path[:-5] + '_alp.jpeg', True)
+def save_output(output: tuple, path: str):
+    """Output valid output"""
+    rgb, wgt, alp = output
+    save_image(rgb, path[:-5] + '_rgb.jpeg')
+    save_image(wgt, path[:-5] + '_wgt.jpeg', norm=True)
+    save_image(alp, path[:-5] + '_alp.jpeg', norm=True)
 
 
-def save_ssw(im: np.ndarray, path: str):
-    """Output sphere sweep images"""
-    b, d2, _, h, w = im.shape
-    d = d2 // 2
-    ref = im[0, :d]
-    src = im[0, d:]
-    save_plot(np.stack([ref[0], src[0]]), path[:-5] + '_far.jpeg')
-    save_plot(np.stack([ref[-1], src[-1]]), path[:-5] + '_ner.jpeg')
+def save_tensor(out: list, path: str):
+    """Output tensor"""
+    for id, im in enumerate(out):
+        im = im.cpu().detach().numpy()[0]
+        minv = im.min()
+        maxv = im.max()
+        im = (im - minv) / (maxv - minv)
+        im = np.expand_dims(im[:3], 1)
+        save_image(im, path[:-5] + '%d.jpeg' % (id + 1), norm=True)
 
 
-def save_input(inp: torch.Tensor, dep: torch.Tensor, path: str):
-    """Output image after ods projection"""
-    inp = inp.cpu().numpy()
-    dep = dep.cpu().numpy()
+def save_curve(curves: list, pos: int, path: str):
+    """Output train loss & Test loss & Test PSNR"""
+    cnames = ['Train', 'Valid', 'PSNR']
+    for cname, curve in zip(cnames, curves):
+        iter = [pos + i + 1 for i in range(len(curve))]
+        plt.plot(iter, curve)
+        plt.xlabel('iteration')
+        plt.ylabel('value')
+        plt.savefig(os.path.join(path, cname + '.jpeg'))
+        plt.close()
+
+
+def prepare_for_train(args):
+    """Prepare folder for training"""
+    if not os.path.exists(args.checkpoint_dir):
+        os.makedirs(args.checkpoint_dir)
+    if os.path.exists(args.result_dir):
+        shutil.rmtree(args.result_dir)
+    os.makedirs(args.infer_dir)
+    os.makedirs(args.sphre_dir)
+    os.makedirs(args.demon_dir)
+    os.makedirs(args.curve_dir)
+    json.dump(args.__dict__, open(os.path.join(args.result_dir, 'Args.txt'), 'w'))
+
+
+def save_batch(batch: dict, path: str):
+    """Save Batch Data"""
+    ref = batch['ref'].cpu().detach().numpy().transpose([0, 3, 1, 2])
+    src = batch['src'].cpu().detach().numpy().transpose([0, 3, 1, 2])
+    tgt = batch['tgt'].cpu().detach().numpy().transpose([0, 3, 1, 2])
+    dep = batch['depth'].cpu().detach().numpy()
+    inp = batch['input'].cpu().detach().numpy()
+    gt = batch['gt'].cpu().detach().numpy()
+    save_image(ref, os.path.join(path, 'Ref.jpeg'))
+    save_image(src, os.path.join(path, 'Src.jpeg'))
+    save_image(tgt, os.path.join(path, 'Tgt.jpeg'))
+    save_image(gt, os.path.join(path, 'GT.jpeg'))
     b, _, h, w = inp.shape
     d = dep.shape[0]
-    inp = inp.reshape([b, 2 * d, 3, h, w])
-    save_ssw(inp, path)
-
-
-def save_origin(ref: torch.Tensor, src: torch.Tensor, path: str):
-    """Output original image"""
-    ref = ref.cpu().numpy()
-    src = src.cpu().numpy()
-    ori = np.concatenate([ref, src], 0).transpose([0, 3, 1, 2])
-    save_plot(ori, path)
-
-
-def save_loss(loss: list, path: str):
-    """Output train loss & test loss"""
-    iter = [i + 1 for i in range(len(loss))]
-    plt.plot(iter, loss)
-    plt.xlabel('iteration')
-    plt.ylabel('loss')
-    plt.savefig(path)
-    plt.close()
+    inp = inp.reshape([b, d*2, 3, h, w])
+    for i in range(d * 2):
+        save_image(inp[0, i], os.path.join(path, 'Sphere_%d.jpeg' % (i + 1)))
 
 
 def calc_psnr(im: np.ndarray, gt: np.ndarray):
@@ -157,3 +157,18 @@ def calc_psnr(im: np.ndarray, gt: np.ndarray):
     df = np.mean(np.sum(df * df, axis=(1, 2, 3)) / (c * h * w))
     psnr = 10 * np.log10(255 * 255 / df)
     return psnr
+
+
+def calc_ssim(im: np.ndarray, gt: np.ndarray):
+    """Output SSIM"""
+    pass
+
+
+def calc_feature(data: list):
+    """Calc Mean & Var"""
+    data = np.array(data)
+    size = data.shape[0]
+    mean = np.mean(data)
+    vari = 1.0 / size * np.power(data - mean, 2.0).sum()
+    return mean, vari
+

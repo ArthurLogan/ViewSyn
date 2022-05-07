@@ -2,9 +2,8 @@ import torch
 from torch import nn
 import numpy as np
 import lpips
-
 from Projector import project_spherical, lat_lon_grid
-from Utils import bilinear_wrapper, composite
+from Utils import bilinear_wrapper, composite, save_tensor
 
 
 class CoordLayer(nn.Module):
@@ -15,7 +14,7 @@ class CoordLayer(nn.Module):
         """Init Layer"""
         super().__init__()
         self.coord = coord
-        self.conv = nn.Conv2d(inpc + coord, outc, kernel, stride, padding, dilation, padding_mode='circular')
+        self.conv = nn.Conv2d(inpc + coord, outc, kernel, stride, padding, dilation, padding_mode='zeros')
         if output_layer:
             self.activate = nn.Tanh()
         else:
@@ -121,9 +120,9 @@ class SphereLoss(nn.Module):
         super().__init__()
         self.h = h
         self.w = w
-        self.att = self.get_att()
-        self.loss_fn = nn.ModuleList([lpips.LPIPS(net='vgg'), nn.L1Loss()])
-        self.loss_wt = [1, 5]
+        self.att = self.get_att_matry()
+        self.loss_fn = nn.ModuleList([lpips.LPIPS(net='vgg')])
+        self.loss_wt = [1]
 
     def get_att_matry(self, eps: float = 1e-12):
         """Attention matryodshka"""
@@ -160,11 +159,10 @@ class SphereLoss(nn.Module):
 
 class MatryNet(nn.Module):
     """MatryODShka for view synthesis for ods"""
-    def __init__(self, num_depth: int, h: int, w: int, coord: bool, transform: bool, lr: float, beta: tuple):
+    def __init__(self, num_depth: int, h: int, w: int, coord: bool, transform: bool, lr: float, beta: tuple, loss_type: str):
         """Init Network"""
         super().__init__()
 
-        self.channel = 2 * num_depth
         self.num_plane = num_depth
         self.height = h
         self.width = w
@@ -206,8 +204,13 @@ class MatryNet(nn.Module):
             CoordLayer(channel, channel, h, w, coord=coord),
             CoordLayer(channel, channel, h, w, output_layer=True, coord=coord)
         )
+        self.ind = 0
         self.optim = torch.optim.Adam(self.parameters(), lr=lr, betas=beta)
-        self.loss_fn = SphereLoss(h, w)
+        self.loss_type = loss_type
+        if loss_type == 'cube':
+            self.loss_fn = CubeLoss(h, w)
+        else:
+            self.loss_fn = SphereLoss(h, w)
 
     def load_rotate_matrix(self, rot: torch.Tensor):
         """Load rotation matrix"""
@@ -222,6 +225,8 @@ class MatryNet(nn.Module):
         out5 = self.conv5(torch.cat([out4, out3], dim=1))
         out6 = self.conv6(torch.cat([out5, out2], dim=1))
         out7 = self.conv7(torch.cat([out6, out1], dim=1))
+        if not self.training:
+            save_tensor([out1, out2, out3, out4, out5, out6, out7], './result/demo/Out.jpeg')
         return out7
 
     def render(self, rgb: torch.Tensor, alp: torch.Tensor, pose: torch.Tensor, dep: torch.Tensor, rot: torch.Tensor):
@@ -237,15 +242,15 @@ class MatryNet(nn.Module):
         out = composite(out, alp)
         return out
 
-    def step(self, input: torch.Tensor, pose: torch.Tensor, depth: torch.Tensor, rot: torch.Tensor):
+    def step(self, inp: torch.Tensor, pose: torch.Tensor, depth: torch.Tensor, rot: torch.Tensor):
         """Network Forward"""
-        b, _, h, w = input.shape
+        b, _, h, w = inp.shape
         d = self.num_plane
-        out = self.forward(input)
+        out = self.forward(inp)
         wgt = ((out[:, :d] + 1.) / 2.).view([b, d, 1, h, w])
         alp = ((out[:, d:] + 1.) / 2.).view([b, d, 1, h, w])
-        ref = input[:, :(d * 3)].view([b, d, 3, h, w])
-        src = input[:, (d * 3):].view([b, d, 3, h, w])
+        ref = inp[:, :(d * 3)].view([b, d, 3, h, w])
+        src = inp[:, (d * 3):].view([b, d, 3, h, w])
         rgb = wgt * ref + (1 - wgt) * src
 
         wgt = torch.permute(wgt, [1, 0, 2, 3, 4])
@@ -257,7 +262,6 @@ class MatryNet(nn.Module):
     def learn(self, batch: dict):
         """Train"""
         self.train()
-        self.optim.zero_grad()
         inp = batch['input']
         tri = batch['trans']
         gt = batch['gt']
@@ -268,28 +272,22 @@ class MatryNet(nn.Module):
         if self.transform:
             tro, _, _, _ = self.step(tri, pos, dep, self.rot)
             los += 10 * self.loss_fn(tro, out)
-        
-        dep = 1.0 / torch.pow(dep, 2.0)
-        alp = alp.mean(dim=[3, 4])
-        los += -0.02 * (torch.log(alp * (1 - alp)) * dep).sum() / dep.sum()
         los.backward()
-        self.optim.step()
+        self.ind += 1
+        if self.ind % 32 == 0:
+            self.optim.step()
+            self.optim.zero_grad()
         return los.item()
 
     def test(self, batch: dict):
         """Validate"""
         self.eval()
-        self.optim.zero_grad()
         inp = batch['input']
-        tri = batch['trans']
         gt = batch['gt']
         pos = batch['pos']
         dep = batch['depth']
         im, rgb, wgt, alp = self.step(inp, pos, dep, self.one)
         los = self.loss_fn(im, gt)
-        if self.transform:
-            tro, _, _, _ = self.step(tri, pos, dep, self.rot)
-            los += 10 * self.loss_fn(tro, im)
 
         im = im.cpu().detach().numpy()
         gt = gt.cpu().detach().numpy()

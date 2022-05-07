@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-
 from Utils import bilinear_wrapper
 
 
@@ -42,60 +41,11 @@ def backproject_spherical(lat: torch.Tensor, lon: torch.Tensor, depth: torch.Ten
     cosT = torch.cos(ry)
     x = depth * (torch.cos(rx) * cosT)
     y = depth * torch.sin(ry)
-    z = depth * (torch.sin(rx) * cosT)
+    z = -depth * (torch.sin(rx) * cosT)
     return x, y, z
 
 
-def project_ods_fix(points: torch.Tensor, order: int, intrinsic: torch.Tensor, h: int, w: int):
-    """Project points to ods with camera position fix at z-axis"""
-    x = points[0]
-    y = points[1]
-    z = points[2]
-    r = intrinsic[0][0]
-    dx = x
-    dy = y
-    dz = z - r * order
-    theta = -torch.atan2(dz, dx)
-    phi = torch.atan2(dy, torch.sqrt(dx * dx + dz * dz))
-    msk = torch.isnan(phi)
-    phi = msk * torch.ones_like(phi) + (~msk) * phi
-
-    u = ((theta + np.pi - np.pi / w) / (2 * np.pi - 2 * np.pi / w)) * (w - 1)
-    v = ((phi + 0.5 * np.pi - 0.5 * np.pi / h) / (np.pi - np.pi / h)) * (h - 1)
-    uv = torch.stack([u, v], 0)
-    return uv
-
-
-def project_ods_sphere(points: torch.Tensor, order: int, intrinsic: torch.Tensor, h: int, w: int):
-    """Project points to ods with camera position circular"""
-    x = points[0]
-    y = points[1]
-    z = points[2]
-    r = intrinsic[0][0]
-    comp = (r * r) <= (x * x + z * z)
-    domp = ~comp
-
-    one = torch.ones_like(x)
-    px = comp * x + domp * one
-    pz = comp * z + domp * one
-    theta1 = order * torch.asin(r / torch.sqrt(px * px + pz * pz)) - torch.atan2(pz, px)
-    phi1 = torch.atan2(y, torch.sqrt(px * px + pz * pz - r * r))
-
-    px = domp * x
-    pz = domp * z
-    theta2 = -torch.atan2(-order * px, order * pz)
-    phi2 = torch.atan2(y, r - torch.sqrt(px * px + pz * pz))
-
-    theta = comp * theta1 + domp * theta2
-    phi = comp * phi1 + domp * phi2
-
-    u = ((theta + np.pi - np.pi / w) / (2 * np.pi - 2 * np.pi / w)) * (w - 1)
-    v = ((phi + 0.5 * np.pi - 0.5 * np.pi / h) / (np.pi - np.pi / h)) * (h - 1)
-    uv = torch.stack([u, v], 0)
-    return uv
-
-
-def project_ods_matry(points: torch.Tensor, order: int, intrinsic: torch.Tensor, h: int, w: int):
+def project_ods(points: torch.Tensor, order: int, intrinsic: torch.Tensor, h: int, w: int):
     """Project points to ods with camera position circular(Matry)"""
     x = points[0]
     y = points[1]
@@ -162,25 +112,22 @@ def sphere_sweep(ref: torch.Tensor, src: torch.Tensor, tgt: torch.Tensor,
     x, y, z = apply_rotation(rot, x, y, z)
     pnt = torch.stack([x, y, z])
 
-    inp, out = [], []
+    inp = []
     for i in range(b):
-        pix = project_ods_matry(pnt, 1, intrinsic[i], h, w)
+        pix = project_ods(pnt, -1, intrinsic[i], h, w)
         im1 = bilinear_wrapper(ref[i:(i+1)], pix)
         im1 = torch.permute(im1, [0, 3, 1, 2])
         im1 = im1.contiguous().view([1, d * c, h, w])
 
-        pix = project_ods_matry(pnt, -1, intrinsic[i], h, w)
+        pix = project_ods(pnt, 1, intrinsic[i], h, w)
         im2 = bilinear_wrapper(src[i:(i+1)], pix)
         im2 = torch.permute(im2, [0, 3, 1, 2])
         im2 = im2.contiguous().view([1, d * c, h, w])
 
-        im3 = torch.permute(tgt[i], [2, 0, 1]).view([1, c, h, w])
-
         inp.append(torch.cat([im1, im2], 1))
-        out.append(im3)
 
     inp = torch.cat(inp, 0)
-    out = torch.cat(out, 0)
+    out = torch.permute(tgt, [0, 3, 1, 2])
     return inp, out
 
 
@@ -188,7 +135,7 @@ def project_spherical(rot: torch.Tensor, pos: torch.Tensor, dep: torch.Tensor, h
     """Project target image"""
     d = dep.shape[0]
 
-    cx, cy, cz = apply_rotation(rot, pos[:, 2], pos[:, 1], pos[:, 0])
+    cx, cy, cz = apply_rotation(rot, pos[:, 0], pos[:, 1], -pos[:, 2])
     cx = cx.view([-1, 1, 1])
     cy = cy.view([-1, 1, 1])
     cz = cz.view([-1, 1, 1])
